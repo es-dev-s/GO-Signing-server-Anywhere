@@ -81,6 +81,17 @@ func (s *Store) ResetAllOnStartup(ctx context.Context) error {
 	return err
 }
 
+// SoftReconcileOnStartup ends in-flight WebRTC sessions and clears stale socket_id rows
+// without marking every client offline (normal PM2 restarts should not blank the roster).
+func (s *Store) SoftReconcileOnStartup(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `UPDATE sessions SET status = 'ended', ended_at = $1 WHERE status IN ('pending','active')`, nowMs())
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE clients SET socket_id = NULL WHERE socket_id IS NOT NULL`)
+	return err
+}
+
 func (s *Store) SeedDefaultSuperAdmin(ctx context.Context, orgName, username, fullName, password string) error {
 	var n int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM admins`).Scan(&n); err != nil {

@@ -416,6 +416,7 @@ func (h *Hub) handleAdminConnectToClient(ctx context.Context, adminSID string, c
 		return
 	}
 	clientSID := live.socketID
+	h.unlinkAdminFromStaleClientSockets(adminSID, client.ID, clientSID)
 	if !h.adminAlreadyViewing(adminSID, clientSID) {
 		if h.countAdminTargets(adminSID) >= h.cfg.MaxAdminViewerTargets {
 			h.sendConn(conn, map[string]any{"type": "connect-response", "success": false, "error": "ADMIN_VIEWER_LIMIT", "clientId": client.ID})
@@ -497,6 +498,13 @@ func (h *Hub) handleAdminStopViewing(adminSID string, conn *Conn, msg map[string
 		return
 	}
 	clientSID := asNonEmptyString(msg["clientSocketId"], 200)
+	if cid, ok := toInt64(msg["clientId"]); ok && cid > 0 {
+		n := h.unlinkAdminFromClient(adminSID, cid, conn)
+		if n > 0 {
+			h.sendConn(conn, map[string]any{"type": "admin-stop-viewing-response", "success": true, "unlinked": n})
+			return
+		}
+	}
 	if clientSID == "" {
 		h.sendConn(conn, map[string]any{"type": "admin-stop-viewing-response", "success": false})
 		return

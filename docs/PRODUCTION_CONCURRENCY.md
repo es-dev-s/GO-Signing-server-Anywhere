@@ -45,6 +45,8 @@ ENABLE_CLOUDFLARE_SFU=true
 
 - Client **heartbeat** + server stale cleanup keep roster accurate.
 - **SFU publisher** re-registers on reconnect; viewers get `sfu-publisher-ready`.
+- **PM2 restart (default):** soft reconcile only — ends active sessions and clears stale `socket_id`; roster rows stay in DB. Use `SIGNALING_WIPE_DB=1` only in dev to mark every client offline.
+- **Viewer links:** background purge every 12s removes admin↔client edges pointing at dead sockets.
 - Restart signaling after `.env` changes; clients reconnect automatically.
 
 ## Verify

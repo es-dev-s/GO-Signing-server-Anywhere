@@ -110,8 +110,16 @@ func New(cfg config.Config, store *db.Store) *Hub {
 }
 
 func (h *Hub) Run(ctx context.Context) error {
-	if err := h.db.ResetAllOnStartup(ctx); err != nil {
-		return fmt.Errorf("resetAllOnStartup: %w", err)
+	if h.cfg.WipeDBOnStart {
+		if err := h.db.ResetAllOnStartup(ctx); err != nil {
+			return fmt.Errorf("resetAllOnStartup: %w", err)
+		}
+		log.Printf("[startup] SIGNALING_WIPE_DB=1 — all clients marked offline, sessions ended")
+	} else {
+		if err := h.db.SoftReconcileOnStartup(ctx); err != nil {
+			return fmt.Errorf("softReconcileOnStartup: %w", err)
+		}
+		log.Printf("[startup] soft reconcile — ended active sessions, cleared stale socket_id (roster preserved)")
 	}
 	if h.cfg.SeedSuperAdmin && h.cfg.BootstrapPassword != "" {
 		if err := h.db.SeedDefaultSuperAdmin(ctx, h.cfg.BootstrapOrg, h.cfg.BootstrapUsername, h.cfg.BootstrapFullName, h.cfg.BootstrapPassword); err != nil {
@@ -128,6 +136,7 @@ func (h *Hub) Run(ctx context.Context) error {
 
 	go h.pingLoop(ctx)
 	go h.heartbeatLoop(ctx)
+	go h.viewerLinksCleanupLoop(ctx)
 	go h.sessionCleanupLoop(ctx)
 	go h.relayExpiryLoop(ctx)
 
