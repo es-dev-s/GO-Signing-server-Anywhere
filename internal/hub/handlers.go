@@ -183,12 +183,13 @@ func (h *Hub) handleClientAuth(ctx context.Context, socketID string, conn *Conn,
 		"ingestToken": ingest,
 	})
 	if prev != nil && *prev != socketID {
-		h.mu.Lock()
-		if old := h.conns[*prev]; old != nil {
+		h.mu.RLock()
+		old := h.conns[*prev]
+		h.mu.RUnlock()
+		if old != nil {
 			log.Printf("[client-auth] device takeover %s: closing previous socket %s", deviceID, *prev)
 			_ = old.ws.Close()
 		}
-		h.mu.Unlock()
 	}
 	_ = h.broadcastClientsListToAdmins(ctx, res.Client.OrgID)
 }
@@ -376,12 +377,13 @@ func (h *Hub) handleAdminRemoveClient(ctx context.Context, conn *Conn, msg map[s
 	}
 	_ = h.db.DisableClient(ctx, cid)
 	if row.SocketID != nil {
-		h.mu.Lock()
-		if c := h.conns[*row.SocketID]; c != nil {
+		h.mu.RLock()
+		c := h.conns[*row.SocketID]
+		h.mu.RUnlock()
+		if c != nil {
 			h.sendConn(c, map[string]any{"type": "client-disabled", "success": true})
 			_ = c.ws.Close()
 		}
-		h.mu.Unlock()
 	}
 	h.sendConn(conn, map[string]any{"type": "admin-remove-client-response", "success": true})
 	_ = h.broadcastClientsListToAdmins(ctx, row.OrgID)
@@ -511,14 +513,15 @@ func (h *Hub) handleAdminStopViewing(adminSID string, conn *Conn, msg map[string
 	}
 	h.unlinkViewer(adminSID, clientSID)
 	h.mu.RLock()
-	if cc := h.conns[clientSID]; cc != nil && cc.kind == KindClient {
+	cc := h.conns[clientSID]
+	h.mu.RUnlock()
+	if cc != nil && cc.kind == KindClient {
 		name := "Admin"
 		if conn.admin != nil {
 			name = conn.admin.FullName
 		}
 		h.sendConn(cc, map[string]any{"type": "agent-disconnected", "agentSocketId": adminSID, "agentName": name})
 	}
-	h.mu.RUnlock()
 	h.sendConn(conn, map[string]any{"type": "admin-stop-viewing-response", "success": true})
 }
 

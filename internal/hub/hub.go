@@ -290,19 +290,29 @@ func (h *Hub) pingLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			h.mu.RLock()
-			for sid, c := range h.conns {
+			var connsToPing []*Conn
+			var connsToClose []*Conn
+			for _, c := range h.conns {
 				if !c.isAlive {
-					log.Printf("💀 ping timeout %s (%s)", sid, c.ip)
-					_ = c.ws.Close()
+					connsToClose = append(connsToClose, c)
 					continue
 				}
+				connsToPing = append(connsToPing, c)
+			}
+			h.mu.RUnlock()
+
+			for _, c := range connsToClose {
+				log.Printf("💀 ping timeout %s", c.ip)
+				_ = c.ws.Close()
+			}
+
+			for _, c := range connsToPing {
 				c.isAlive = false
 				if err := c.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-					log.Printf("💀 ping write failed %s: %v", sid, err)
+					log.Printf("💀 ping write failed: %v", err)
 					_ = c.ws.Close()
 				}
 			}
-			h.mu.RUnlock()
 		}
 	}
 }
@@ -321,14 +331,18 @@ func (h *Hub) heartbeatLoop(ctx context.Context) {
 				continue
 			}
 			for _, c := range stale {
+				var toClose *websocket.Conn
 				h.mu.Lock()
 				if c.SocketID != nil {
 					if conn, ok := h.conns[*c.SocketID]; ok {
-						_ = conn.ws.Close()
+						toClose = conn.ws
 						delete(h.conns, *c.SocketID)
 					}
 				}
 				h.mu.Unlock()
+				if toClose != nil {
+					_ = toClose.Close()
+				}
 				_ = h.broadcastClientsListToAdmins(ctx, c.OrgID)
 			}
 		}
