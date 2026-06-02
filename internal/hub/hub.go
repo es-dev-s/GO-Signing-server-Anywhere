@@ -253,6 +253,9 @@ func (h *Hub) readLoop(socketID string, conn *Conn) {
 	for {
 		_, raw, err := conn.ws.ReadMessage()
 		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Printf("🔌 read ended %s (%s): %v", socketID, conn.ip, err)
+			}
 			return
 		}
 		conn.isAlive = true
@@ -280,12 +283,15 @@ func (h *Hub) pingLoop(ctx context.Context) {
 			h.mu.RLock()
 			for sid, c := range h.conns {
 				if !c.isAlive {
-					log.Printf("💀 ping timeout %s", sid)
+					log.Printf("💀 ping timeout %s (%s)", sid, c.ip)
 					_ = c.ws.Close()
 					continue
 				}
 				c.isAlive = false
-				_ = c.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
+				if err := c.ws.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					log.Printf("💀 ping write failed %s: %v", sid, err)
+					_ = c.ws.Close()
+				}
 			}
 			h.mu.RUnlock()
 		}

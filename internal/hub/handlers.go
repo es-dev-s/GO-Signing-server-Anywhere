@@ -150,16 +150,23 @@ func (h *Hub) handleClientAuth(ctx context.Context, socketID string, conn *Conn,
 	prev, _ := h.db.GetSocketIDForDevice(ctx, deviceID)
 	if prev != nil && *prev != socketID {
 		h.mu.RLock()
+		prevConn := h.conns[*prev]
 		last := h.lastDeviceTakeover[deviceID]
 		h.mu.RUnlock()
-		if time.Now().UnixMilli()-last < h.cfg.DeviceTakeoverCooldownMs {
-			h.sendConn(conn, map[string]any{"type": "client-auth-response", "success": false, "error": "DUPLICATE_DEVICE"})
-			_ = conn.ws.Close()
-			return
+		// Only throttle when the *previous socket is still connected* (two live clients fighting).
+		// After OTA/reconnect the DB may still list a dead socket_id until disconnect runs — do not
+		// reject legitimate reconnects with DUPLICATE_DEVICE in that case.
+		if prevConn != nil {
+			if time.Now().UnixMilli()-last < h.cfg.DeviceTakeoverCooldownMs {
+				log.Printf("[client-auth] DUPLICATE_DEVICE device=%s prev=%s new=%s (cooldown)", deviceID, *prev, socketID)
+				h.sendConn(conn, map[string]any{"type": "client-auth-response", "success": false, "error": "DUPLICATE_DEVICE"})
+				_ = conn.ws.Close()
+				return
+			}
+			h.mu.Lock()
+			h.lastDeviceTakeover[deviceID] = time.Now().UnixMilli()
+			h.mu.Unlock()
 		}
-		h.mu.Lock()
-		h.lastDeviceTakeover[deviceID] = time.Now().UnixMilli()
-		h.mu.Unlock()
 	}
 	res, err := h.db.UpsertClientAuth(ctx, deviceID, orgName, fullName, socketID)
 	if err != nil || !res.Success {
@@ -178,6 +185,7 @@ func (h *Hub) handleClientAuth(ctx context.Context, socketID string, conn *Conn,
 	if prev != nil && *prev != socketID {
 		h.mu.Lock()
 		if old := h.conns[*prev]; old != nil {
+			log.Printf("[client-auth] device takeover %s: closing previous socket %s", deviceID, *prev)
 			_ = old.ws.Close()
 		}
 		h.mu.Unlock()
