@@ -688,27 +688,37 @@ func (h *Hub) disconnect(socketID string) {
 			h.sfu.clearPublisher(client.ID)
 			_ = h.broadcastClientsListToAdmins(ctx, client.OrgID)
 		}
+		var adminSIDs []string
 		h.mu.Lock()
 		for adminSID := range h.clientViewerLinks[socketID] {
+			adminSIDs = append(adminSIDs, adminSID)
+		}
+		h.mu.Unlock()
+		for _, adminSID := range adminSIDs {
 			h.unlinkViewer(adminSID, socketID)
 		}
-		delete(h.clientViewerLinks, socketID)
-		h.mu.Unlock()
 	}
 	if conn.kind == KindAdmin {
+		var clientSIDs []string
 		h.mu.Lock()
 		for clientSID := range h.adminViewerLinks[socketID] {
-			if cc := h.conns[clientSID]; cc != nil {
-				name := "Admin"
-				if conn.admin != nil {
-					name = conn.admin.FullName
-				}
+			clientSIDs = append(clientSIDs, clientSID)
+		}
+		h.mu.Unlock()
+
+		name := "Admin"
+		if conn.admin != nil {
+			name = conn.admin.FullName
+		}
+		for _, clientSID := range clientSIDs {
+			h.mu.RLock()
+			cc := h.conns[clientSID]
+			h.mu.RUnlock()
+			if cc != nil {
 				h.sendConn(cc, map[string]any{"type": "agent-disconnected", "agentSocketId": socketID, "agentName": name})
 			}
 			h.unlinkViewer(socketID, clientSID)
 		}
-		delete(h.adminViewerLinks, socketID)
-		h.mu.Unlock()
 	}
 	log.Printf("🔌 Disconnected: %s", socketID)
 }
