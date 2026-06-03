@@ -31,6 +31,24 @@ func (s *Store) SetClientOrgNow(ctx context.Context, clientID, orgID int64) erro
 	return err
 }
 
+// ReconcileClientOrgsFromApprovedTransfers fixes clients whose org_id drifted (e.g. reconnect
+// overwrote an approved transfer). Uses each client's latest approved transfer as source of truth.
+func (s *Store) ReconcileClientOrgsFromApprovedTransfers(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE clients AS c
+		SET org_id = lt.to_org_id, pending_org_id = NULL
+		FROM (
+			SELECT DISTINCT ON (client_id) client_id, to_org_id
+			FROM transfer_requests
+			WHERE status = 'approved'
+			ORDER BY client_id, updated_at DESC, id DESC
+		) AS lt
+		WHERE c.id = lt.client_id
+		  AND c.disabled = 0
+		  AND c.org_id IS DISTINCT FROM lt.to_org_id`)
+	return err
+}
+
 // ResolvePendingTransfersForClient closes any open transfer requests after an immediate org move.
 func (s *Store) ResolvePendingTransfersForClient(ctx context.Context, clientID, approvedByAdminID int64) error {
 	_, err := s.pool.Exec(ctx,

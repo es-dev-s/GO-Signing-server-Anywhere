@@ -296,6 +296,7 @@ func (h *Hub) handleAdminGetClients(ctx context.Context, conn *Conn, msg map[str
 	if admin == nil {
 		return
 	}
+	_ = h.db.ReconcileClientOrgsFromApprovedTransfers(ctx)
 	targetOrg := admin.OrgID
 	if admin.Role == "super_admin" {
 		if oid, ok := toInt64(msg["orgId"]); ok {

@@ -10,6 +10,7 @@ func (h *Hub) applyClientOrgTransfer(ctx context.Context, clientID, fromOrgID, t
 	if err := h.db.SetClientOrgNow(ctx, clientID, toOrgID); err != nil {
 		return err
 	}
+	_ = h.db.ReconcileClientOrgsFromApprovedTransfers(ctx)
 	if approvedByAdminID > 0 {
 		_ = h.db.ResolvePendingTransfersForClient(ctx, clientID, approvedByAdminID)
 	}
