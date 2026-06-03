@@ -164,83 +164,12 @@ func (h *Hub) handleRemoteAccess(ctx context.Context, typ string, conn *Conn, ms
 	}
 }
 
-func (h *Hub) auditProxyInAppGroupsGet(ctx context.Context, conn *Conn, msg map[string]any) {
-	ipc := asNonEmptyString(msg["ipcCorrId"], 64)
-	admin := h.requireAdmin(ctx, conn, msg)
-	if admin == nil || admin.Role != "super_admin" {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "ipcCorrId": ipc})
-		return
-	}
-	if !h.audit.Configured {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
-		return
-	}
-	ok, status, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodGet, nil)
-	if err != nil || !ok {
-		errCode, errMsg := auditProxyFailPayload(data, status, err)
-		h.sendConn(conn, map[string]any{
-			"type": "admin-in-app-groups-get-response", "success": false,
-			"error": errCode, "message": errMsg, "ipcCorrId": ipc,
-		})
-		return
-	}
-	h.sendConn(conn, map[string]any{
-		"type": "admin-in-app-groups-get-response", "success": true,
-		"groups": data["groups"], "ipcCorrId": ipc,
-	})
-}
-
-func (h *Hub) auditProxyInAppGroupsMutate(ctx context.Context, conn *Conn, msg map[string]any) {
-	ipc := asNonEmptyString(msg["ipcCorrId"], 64)
-	admin := h.requireAdmin(ctx, conn, msg)
-	if admin == nil || admin.Role != "super_admin" {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "ipcCorrId": ipc})
-		return
-	}
-	if !h.audit.Configured {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
-		return
-	}
-	raw, _ := json.Marshal(auditMutateBodyFromMsg(msg))
-	ok, status, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodPost, raw)
-	if err != nil || !ok {
-		errCode, errMsg := auditProxyFailPayload(data, status, err)
-		h.sendConn(conn, map[string]any{
-			"type": "admin-in-app-groups-mutate-response", "success": false,
-			"error": errCode, "message": errMsg, "ipcCorrId": ipc,
-		})
-		return
-	}
-	resp := map[string]any{"type": "admin-in-app-groups-mutate-response", "success": true, "ipcCorrId": ipc}
-	for k, v := range data {
-		resp[k] = v
-	}
-	h.sendConn(conn, resp)
-}
-
-func (h *Hub) inAppAllowsClient(ctx context.Context, adminID, clientID, orgID int64) bool {
-	if !h.audit.Configured {
-		return true
-	}
-	body, _ := json.Marshal(map[string]any{
-		"signalingAdminId": adminID,
-		"signalClientId":   clientID,
-		"signalOrgId":      orgID,
-	})
-	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups/check-access", http.MethodPost, body)
-	if err != nil || !ok {
-		return true
-	}
-	allowed, _ := data["allowed"].(bool)
-	return allowed
-}
-
-func (h *Hub) filterClientsByInAppScope(ctx context.Context, adminID int64, clients []map[string]any) []map[string]any {
+func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminID int64, clients []map[string]any) []map[string]any {
 	if !h.audit.Configured || len(clients) == 0 {
 		return clients
 	}
 	q := fmt.Sprintf("?signalingAdminId=%d", adminID)
-	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups/my-scope"+q, http.MethodGet, nil)
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/audit-groups/org-admin-scope"+q, http.MethodGet, nil)
 	if err != nil || !ok {
 		return clients
 	}
@@ -267,6 +196,22 @@ func (h *Hub) filterClientsByInAppScope(ctx context.Context, adminID int64, clie
 		}
 	}
 	return out
+}
+
+func (h *Hub) orgAdminAllowsAuditGroupClient(ctx context.Context, adminID, clientID int64) bool {
+	if !h.audit.Configured {
+		return true
+	}
+	body, _ := json.Marshal(map[string]any{
+		"signalingAdminId": adminID,
+		"signalClientId":   clientID,
+	})
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/audit-groups/check-org-admin-access", http.MethodPost, body)
+	if err != nil || !ok {
+		return true
+	}
+	allowed, _ := data["allowed"].(bool)
+	return allowed
 }
 
 func (h *Hub) handleStreamRelay(ctx context.Context, typ string, conn *Conn, msg map[string]any) {

@@ -74,10 +74,6 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 		h.auditProxyGroupsGet(ctx, conn, msg)
 	case "admin-audit-groups-mutate":
 		h.auditProxyGroupsMutate(ctx, conn, msg)
-	case "admin-in-app-groups-get":
-		h.auditProxyInAppGroupsGet(ctx, conn, msg)
-	case "admin-in-app-groups-mutate":
-		h.auditProxyInAppGroupsMutate(ctx, conn, msg)
 	case "offer", "answer", "ice-candidate", "client-ready", "request-offer", "enable-client-media", "client-screen-sources":
 		h.relaySignaling(socketID, conn, msg)
 	case "ice-path-report":
@@ -302,7 +298,7 @@ func (h *Hub) handleAdminGetClients(ctx context.Context, conn *Conn, msg map[str
 		clients = append(clients, h.mapAdminClientRow(c))
 	}
 	if admin.Role == "org_admin" || admin.Role == "it_ops" {
-		clients = h.filterClientsByInAppScope(ctx, admin.AdminID, clients)
+		clients = h.filterClientsByAuditGroupOrgAdminScope(ctx, admin.AdminID, clients)
 	}
 	h.sendConn(conn, map[string]any{"type": "admin-get-clients-response", "success": true, "clients": clients, "orgId": targetOrg})
 }
@@ -424,10 +420,10 @@ func (h *Hub) handleAdminConnectToClient(ctx context.Context, adminSID string, c
 		return
 	}
 	if admin.Role == "org_admin" || admin.Role == "it_ops" {
-		if !h.inAppAllowsClient(ctx, admin.AdminID, client.ID, client.OrgID) {
+		if !h.orgAdminAllowsAuditGroupClient(ctx, admin.AdminID, client.ID) {
 			h.sendConn(conn, map[string]any{
 				"type": "connect-response", "success": false, "error": "FORBIDDEN",
-				"message": "This member is outside your assigned in-app groups.",
+				"message": "This member is not in any audit group assigned to you.",
 				"clientId": client.ID,
 			})
 			return
