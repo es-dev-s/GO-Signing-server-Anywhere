@@ -58,6 +58,10 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 			list, _ := h.db.ListTransferRequests(ctx, a.Role, a.OrgID)
 			h.sendConn(conn, map[string]any{"type": "admin-get-transfer-requests-response", "success": true, "requests": list})
 		}
+	case "admin-create-transfer-request":
+		h.handleAdminCreateTransferRequest(ctx, conn, msg)
+	case "admin-respond-transfer-request":
+		h.handleAdminRespondTransferRequest(ctx, conn, msg)
 	case "admin-get-ui-features":
 		h.handleAdminGetUIFeatures(ctx, conn, msg)
 	case "admin-set-ui-features":
@@ -298,7 +302,7 @@ func (h *Hub) handleAdminGetClients(ctx context.Context, conn *Conn, msg map[str
 		clients = append(clients, h.mapAdminClientRow(c))
 	}
 	if admin.Role == "org_admin" || admin.Role == "it_ops" {
-		clients = h.filterClientsByAuditGroupOrgAdminScope(ctx, admin.AdminID, clients)
+		clients = h.filterClientsByAuditGroupOrgAdminScope(ctx, admin.AdminID, admin.OrgID, clients)
 	}
 	h.sendConn(conn, map[string]any{"type": "admin-get-clients-response", "success": true, "clients": clients, "orgId": targetOrg})
 }
@@ -355,8 +359,20 @@ func (h *Hub) handleAdminUpdateClientOrg(ctx context.Context, conn *Conn, msg ma
 		h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": false, "error": "INVALID_INPUT"})
 		return
 	}
-	_ = h.db.SetClientPendingOrg(ctx, cid, oid)
-	h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": true})
+	client, _ := h.db.GetClientByID(ctx, cid)
+	if client == nil {
+		h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": false, "error": "NOT_FOUND"})
+		return
+	}
+	if client.OrgID == oid {
+		h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": true, "message": "Client is already in this team"})
+		return
+	}
+	if err := h.applyClientOrgTransfer(ctx, cid, client.OrgID, oid, admin.AdminID); err != nil {
+		h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": false, "error": "SERVER_ERROR"})
+		return
+	}
+	h.sendConn(conn, map[string]any{"type": "admin-update-client-org-response", "success": true, "message": "Client transferred"})
 }
 
 func (h *Hub) handleAdminRemoveClient(ctx context.Context, conn *Conn, msg map[string]any) {
@@ -420,7 +436,7 @@ func (h *Hub) handleAdminConnectToClient(ctx context.Context, adminSID string, c
 		return
 	}
 	if admin.Role == "org_admin" || admin.Role == "it_ops" {
-		if !h.orgAdminAllowsAuditGroupClient(ctx, admin.AdminID, client.ID) {
+		if !h.orgAdminAllowsAuditGroupClient(ctx, admin, client.ID) {
 			h.sendConn(conn, map[string]any{
 				"type": "connect-response", "success": false, "error": "FORBIDDEN",
 				"message": "This member is not in any audit group assigned to you.",
@@ -857,7 +873,7 @@ func (h *Hub) broadcastClientsListToAdmins(ctx context.Context, orgID int64) err
 			out = filtered
 		}
 		if conn.admin.Role == "org_admin" || conn.admin.Role == "it_ops" {
-			out = h.filterClientsByAuditGroupOrgAdminScope(ctx, conn.admin.AdminID, out)
+			out = h.filterClientsByAuditGroupOrgAdminScope(ctx, conn.admin.AdminID, conn.admin.OrgID, out)
 		}
 		h.sendConn(conn, map[string]any{"type": "admin-clients-updated", "success": true, "orgId": orgID, "clients": out})
 	}

@@ -74,7 +74,7 @@ If live feed shows “Establishing stream…” forever:
 
 ## Known Go gaps (non-blocking for core streaming)
 
-- Transfer request create/respond: list stub only; extend `internal/db` if you rely on full transfer workflow.
+- Transfer: super-admin drag-and-drop applies instantly; org-admin uses pending approve/reject workflow.
 - Taskbar history GET: returns empty list (live WS broadcast only).
 - Legacy `.env.turn` file auto-load: set TURN_* in `.env` explicitly for Go.
 

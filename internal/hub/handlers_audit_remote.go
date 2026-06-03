@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/anywhere/signing-server-go/internal/auditproxy"
+	"github.com/anywhere/signing-server-go/internal/db"
 )
 
 func auditMutateBodyFromMsg(msg map[string]any) map[string]any {
@@ -164,7 +165,7 @@ func (h *Hub) handleRemoteAccess(ctx context.Context, typ string, conn *Conn, ms
 	}
 }
 
-func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminID int64, clients []map[string]any) []map[string]any {
+func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminID int64, adminOrgID int64, clients []map[string]any) []map[string]any {
 	if !h.audit.Configured || len(clients) == 0 {
 		return clients
 	}
@@ -191,6 +192,12 @@ func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminI
 	out := make([]map[string]any, 0, len(clients))
 	for _, c := range clients {
 		cid, _ := toInt64(c["id"])
+		orgID, _ := toInt64(c["orgId"])
+		// Org members (including after transfer) are always visible to their org admin.
+		if orgID == adminOrgID {
+			out = append(out, c)
+			continue
+		}
 		if allowed[cid] {
 			out = append(out, c)
 		}
@@ -198,12 +205,19 @@ func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminI
 	return out
 }
 
-func (h *Hub) orgAdminAllowsAuditGroupClient(ctx context.Context, adminID, clientID int64) bool {
+func (h *Hub) orgAdminAllowsAuditGroupClient(ctx context.Context, admin *db.AdminRow, clientID int64) bool {
+	if admin == nil {
+		return false
+	}
+	client, _ := h.db.GetClientByID(ctx, clientID)
+	if client != nil && client.OrgID == admin.OrgID {
+		return true
+	}
 	if !h.audit.Configured {
 		return true
 	}
 	body, _ := json.Marshal(map[string]any{
-		"signalingAdminId": adminID,
+		"signalingAdminId": admin.AdminID,
 		"signalClientId":   clientID,
 	})
 	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/audit-groups/check-org-admin-access", http.MethodPost, body)

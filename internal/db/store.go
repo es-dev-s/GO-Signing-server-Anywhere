@@ -541,23 +541,6 @@ func (s *Store) InsertCallEvent(ctx context.Context, clientID int64, typ, platfo
 	return err
 }
 
-// Placeholder types for transfer/remote/relay — implement minimal list stubs
-func (s *Store) ListTransferRequests(ctx context.Context, role string, orgID int64) ([]map[string]any, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, client_id, from_org_id, to_org_id, status FROM transfer_requests ORDER BY id DESC LIMIT 200`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var id, cid, from, to int64
-		var st string
-		_ = rows.Scan(&id, &cid, &from, &to, &st)
-		out = append(out, map[string]any{"id": id, "clientId": cid, "fromOrgId": from, "toOrgId": to, "status": st})
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) GetOrganizationSummaries(ctx context.Context) ([]map[string]any, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, name FROM organizations ORDER BY name`)
 	if err != nil {
