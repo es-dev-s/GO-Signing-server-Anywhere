@@ -856,6 +856,9 @@ func (h *Hub) broadcastClientsListToAdmins(ctx context.Context, orgID int64) err
 			}
 			out = filtered
 		}
+		if conn.admin.Role == "org_admin" || conn.admin.Role == "it_ops" {
+			out = h.filterClientsByAuditGroupOrgAdminScope(ctx, conn.admin.AdminID, out)
+		}
 		h.sendConn(conn, map[string]any{"type": "admin-clients-updated", "success": true, "orgId": orgID, "clients": out})
 	}
 	return nil
