@@ -66,6 +66,14 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 		h.handleAdminGetUIFeatures(ctx, conn, msg)
 	case "admin-set-ui-features":
 		h.handleAdminSetUIFeatures(ctx, conn, msg)
+	case "admin-list-resettable-admins":
+		h.handleAdminListResettableAdmins(ctx, conn, msg)
+	case "admin-reset-password":
+		h.handleAdminResetPassword(ctx, conn, msg)
+	case "admin-get-stream-window":
+		h.handleAdminGetStreamWindow(ctx, conn, msg)
+	case "admin-set-stream-window":
+		h.handleAdminSetStreamWindow(ctx, conn, msg)
 	case "admin-update-client-org":
 		h.handleAdminUpdateClientOrg(ctx, conn, msg)
 	case "admin-remove-client":
@@ -233,12 +241,19 @@ func (h *Hub) handleAdminLogin(ctx context.Context, socketID string, conn *Conn,
 	conn.client = nil
 	conn.ipStatusSent = false
 	features, _ := h.db.GetAdminUiFeatures(ctx)
-	h.sendConn(conn, map[string]any{
+	loginResp := map[string]any{
 		"type": "admin-login-response", "success": true, "token": sess.Token, "expiresAt": sess.ExpiresAt,
 		"admin": map[string]any{"id": adminID, "orgId": org.ID, "username": row["username"], "fullName": row["full_name"], "role": row["role"]},
 		"org": map[string]any{"id": org.ID, "name": org.Name},
 		"adminUiFeatures": features,
-	})
+	}
+	if fmt.Sprint(row["role"]) == "org_admin" {
+		if sw, err := h.db.GetOrgAdminStreamWindow(ctx); err == nil {
+			allowed, _ := sw.AllowedNow(time.Now())
+			loginResp["orgAdminStreamWindow"] = streamWindowPayload(sw, allowed)
+		}
+	}
+	h.sendConn(conn, loginResp)
 	adminRow := &db.AdminRow{AdminID: adminID, OrgID: org.ID, Username: fmt.Sprint(row["username"]), FullName: fmt.Sprint(row["full_name"]), Role: fmt.Sprint(row["role"])}
 	h.maybeSendAdminIPStatus(socketID, adminRow, conn)
 }
@@ -441,6 +456,15 @@ func (h *Hub) handleAdminConnectToClient(ctx context.Context, adminSID string, c
 				"type": "connect-response", "success": false, "error": "FORBIDDEN",
 				"message": "This member is not in any audit group assigned to you.",
 				"clientId": client.ID,
+			})
+			return
+		}
+	}
+	if admin.Role == "org_admin" {
+		if ok, denyMsg := h.orgAdminStreamConnectAllowed(ctx); !ok {
+			h.sendConn(conn, map[string]any{
+				"type": "connect-response", "success": false, "error": "STREAM_WINDOW_CLOSED",
+				"message": denyMsg, "clientId": client.ID,
 			})
 			return
 		}
