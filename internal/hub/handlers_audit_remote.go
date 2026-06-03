@@ -9,6 +9,33 @@ import (
 	"github.com/anywhere/signing-server-go/internal/auditproxy"
 )
 
+func auditMutateBodyFromMsg(msg map[string]any) map[string]any {
+	skip := map[string]bool{"type": true, "token": true, "ipcCorrId": true, "workstationIps": true}
+	body := map[string]any{}
+	for k, v := range msg {
+		if skip[k] {
+			continue
+		}
+		body[k] = v
+	}
+	return body
+}
+
+func auditProxyFailPayload(data map[string]any, status int, fetchErr error) (errCode, message string) {
+	if data != nil {
+		if e, ok := data["error"].(string); ok && e != "" {
+			return e, e
+		}
+	}
+	if fetchErr != nil {
+		return "AUDIT_REQUEST_FAILED", auditproxy.FormatNetworkError(fetchErr)
+	}
+	if status > 0 {
+		return "AUDIT_HTTP_ERROR", fmt.Sprintf("audit API HTTP %d", status)
+	}
+	return "REQUEST_FAILED", "Request failed"
+}
+
 func (h *Hub) auditProxyReview(ctx context.Context, conn *Conn, msg map[string]any) {
 	ipc := asNonEmptyString(msg["ipcCorrId"], 64)
 	admin := h.requireAdmin(ctx, conn, msg)
@@ -64,17 +91,14 @@ func (h *Hub) auditProxyGroupsMutate(ctx context.Context, conn *Conn, msg map[st
 		h.sendConn(conn, map[string]any{"type": "admin-audit-groups-mutate-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
 		return
 	}
-	body := map[string]any{}
-	for k, v := range msg {
-		if k == "type" || k == "token" || k == "ipcCorrId" {
-			continue
-		}
-		body[k] = v
-	}
-	raw, _ := json.Marshal(body)
-	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/audit-groups", http.MethodPost, raw)
+	raw, _ := json.Marshal(auditMutateBodyFromMsg(msg))
+	ok, status, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/audit-groups", http.MethodPost, raw)
 	if err != nil || !ok {
-		h.sendConn(conn, map[string]any{"type": "admin-audit-groups-mutate-response", "success": false, "ipcCorrId": ipc})
+		errCode, errMsg := auditProxyFailPayload(data, status, err)
+		h.sendConn(conn, map[string]any{
+			"type": "admin-audit-groups-mutate-response", "success": false,
+			"error": errCode, "message": errMsg, "ipcCorrId": ipc,
+		})
 		return
 	}
 	resp := map[string]any{"type": "admin-audit-groups-mutate-response", "success": true, "ipcCorrId": ipc}
@@ -151,9 +175,13 @@ func (h *Hub) auditProxyInAppGroupsGet(ctx context.Context, conn *Conn, msg map[
 		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
 		return
 	}
-	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodGet, nil)
+	ok, status, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodGet, nil)
 	if err != nil || !ok {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "ipcCorrId": ipc})
+		errCode, errMsg := auditProxyFailPayload(data, status, err)
+		h.sendConn(conn, map[string]any{
+			"type": "admin-in-app-groups-get-response", "success": false,
+			"error": errCode, "message": errMsg, "ipcCorrId": ipc,
+		})
 		return
 	}
 	h.sendConn(conn, map[string]any{
@@ -173,17 +201,14 @@ func (h *Hub) auditProxyInAppGroupsMutate(ctx context.Context, conn *Conn, msg m
 		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
 		return
 	}
-	body := map[string]any{}
-	for k, v := range msg {
-		if k == "type" || k == "token" || k == "ipcCorrId" {
-			continue
-		}
-		body[k] = v
-	}
-	raw, _ := json.Marshal(body)
-	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodPost, raw)
+	raw, _ := json.Marshal(auditMutateBodyFromMsg(msg))
+	ok, status, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodPost, raw)
 	if err != nil || !ok {
-		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "ipcCorrId": ipc})
+		errCode, errMsg := auditProxyFailPayload(data, status, err)
+		h.sendConn(conn, map[string]any{
+			"type": "admin-in-app-groups-mutate-response", "success": false,
+			"error": errCode, "message": errMsg, "ipcCorrId": ipc,
+		})
 		return
 	}
 	resp := map[string]any{"type": "admin-in-app-groups-mutate-response", "success": true, "ipcCorrId": ipc}

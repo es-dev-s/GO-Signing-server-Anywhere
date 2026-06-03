@@ -317,7 +317,11 @@ func (h *Hub) handleAdminGetOrgLeads(ctx context.Context, conn *Conn, msg map[st
 		orgID = &admin.OrgID
 	}
 	leads, _ := h.db.GetOrgLeads(ctx, orgID)
-	h.sendConn(conn, map[string]any{"type": "admin-get-org-leads-response", "success": true, "leads": leads})
+	resp := map[string]any{"type": "admin-get-org-leads-response", "success": true, "leads": leads}
+	if ipc := asNonEmptyString(msg["ipcCorrId"], 64); ipc != "" {
+		resp["ipcCorrId"] = ipc
+	}
+	h.sendConn(conn, resp)
 }
 
 func (h *Hub) handleAdminGetUIFeatures(ctx context.Context, conn *Conn, msg map[string]any) {
