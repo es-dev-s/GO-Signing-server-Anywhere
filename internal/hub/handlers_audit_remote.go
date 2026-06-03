@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/anywhere/signing-server-go/internal/auditproxy"
@@ -137,6 +138,110 @@ func (h *Hub) handleRemoteAccess(ctx context.Context, typ string, conn *Conn, ms
 		list, _ := h.db.GetAllPendingRemoteAccessRequests(ctx)
 		h.sendConn(conn, map[string]any{"type": "pending-remote-access-requests", "requests": list, "ipcCorrId": ipc})
 	}
+}
+
+func (h *Hub) auditProxyInAppGroupsGet(ctx context.Context, conn *Conn, msg map[string]any) {
+	ipc := asNonEmptyString(msg["ipcCorrId"], 64)
+	admin := h.requireAdmin(ctx, conn, msg)
+	if admin == nil || admin.Role != "super_admin" {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "ipcCorrId": ipc})
+		return
+	}
+	if !h.audit.Configured {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
+		return
+	}
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodGet, nil)
+	if err != nil || !ok {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-get-response", "success": false, "ipcCorrId": ipc})
+		return
+	}
+	h.sendConn(conn, map[string]any{
+		"type": "admin-in-app-groups-get-response", "success": true,
+		"groups": data["groups"], "ipcCorrId": ipc,
+	})
+}
+
+func (h *Hub) auditProxyInAppGroupsMutate(ctx context.Context, conn *Conn, msg map[string]any) {
+	ipc := asNonEmptyString(msg["ipcCorrId"], 64)
+	admin := h.requireAdmin(ctx, conn, msg)
+	if admin == nil || admin.Role != "super_admin" {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "ipcCorrId": ipc})
+		return
+	}
+	if !h.audit.Configured {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "error": "AUDIT_PROXY_NOT_CONFIGURED", "ipcCorrId": ipc})
+		return
+	}
+	body := map[string]any{}
+	for k, v := range msg {
+		if k == "type" || k == "token" || k == "ipcCorrId" {
+			continue
+		}
+		body[k] = v
+	}
+	raw, _ := json.Marshal(body)
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups", http.MethodPost, raw)
+	if err != nil || !ok {
+		h.sendConn(conn, map[string]any{"type": "admin-in-app-groups-mutate-response", "success": false, "ipcCorrId": ipc})
+		return
+	}
+	resp := map[string]any{"type": "admin-in-app-groups-mutate-response", "success": true, "ipcCorrId": ipc}
+	for k, v := range data {
+		resp[k] = v
+	}
+	h.sendConn(conn, resp)
+}
+
+func (h *Hub) inAppAllowsClient(ctx context.Context, adminID, clientID, orgID int64) bool {
+	if !h.audit.Configured {
+		return true
+	}
+	body, _ := json.Marshal(map[string]any{
+		"signalingAdminId": adminID,
+		"signalClientId":   clientID,
+		"signalOrgId":      orgID,
+	})
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups/check-access", http.MethodPost, body)
+	if err != nil || !ok {
+		return true
+	}
+	allowed, _ := data["allowed"].(bool)
+	return allowed
+}
+
+func (h *Hub) filterClientsByInAppScope(ctx context.Context, adminID int64, clients []map[string]any) []map[string]any {
+	if !h.audit.Configured || len(clients) == 0 {
+		return clients
+	}
+	q := fmt.Sprintf("?signalingAdminId=%d", adminID)
+	ok, _, data, err := auditproxy.FetchJSON(ctx, h.audit, "/api/superadmin/in-app-groups/my-scope"+q, http.MethodGet, nil)
+	if err != nil || !ok {
+		return clients
+	}
+	hasScope, _ := data["hasGroupScope"].(bool)
+	if !hasScope {
+		return clients
+	}
+	allowed := make(map[int64]bool)
+	if ids, ok := data["signalClientIds"].([]any); ok {
+		for _, id := range ids {
+			if n, ok := toInt64(id); ok && n > 0 {
+				allowed[n] = true
+			}
+		}
+	}
+	if len(allowed) == 0 {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(clients))
+	for _, c := range clients {
+		cid, _ := toInt64(c["id"])
+		if allowed[cid] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (h *Hub) handleStreamRelay(ctx context.Context, typ string, conn *Conn, msg map[string]any) {
