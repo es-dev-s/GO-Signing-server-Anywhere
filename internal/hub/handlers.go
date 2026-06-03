@@ -204,6 +204,9 @@ func (h *Hub) handleClientAuth(ctx context.Context, socketID string, conn *Conn,
 		}
 	}
 	_ = h.broadcastClientsListToAdmins(ctx, res.Client.OrgID)
+	if res.ExtraBroadcastOrgID != nil {
+		_ = h.broadcastClientsListToAdmins(ctx, *res.ExtraBroadcastOrgID)
+	}
 }
 
 func (h *Hub) handleAdminLogin(ctx context.Context, socketID string, conn *Conn, msg map[string]any) {

@@ -186,9 +186,6 @@ func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminI
 			}
 		}
 	}
-	if len(allowed) == 0 {
-		return []map[string]any{}
-	}
 	out := make([]map[string]any, 0, len(clients))
 	for _, c := range clients {
 		cid, _ := toInt64(c["id"])
@@ -198,7 +195,7 @@ func (h *Hub) filterClientsByAuditGroupOrgAdminScope(ctx context.Context, adminI
 			out = append(out, c)
 			continue
 		}
-		if allowed[cid] {
+		if len(allowed) > 0 && allowed[cid] {
 			out = append(out, c)
 		}
 	}

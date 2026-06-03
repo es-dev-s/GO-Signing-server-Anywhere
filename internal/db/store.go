@@ -306,8 +306,12 @@ func (s *Store) UpsertClientAuth(ctx context.Context, deviceID, orgName, fullNam
 		org = &o
 	}
 	var existing ClientRow
-	err = s.pool.QueryRow(ctx, `SELECT id, org_id, full_name, status, disabled FROM clients WHERE device_id = $1`, dev).
-		Scan(&existing.ID, &existing.OrgID, &existing.FullName, &existing.Status, &existing.Disabled)
+	var pendingOrgID *int64
+	var existingClaimed *string
+	err = s.pool.QueryRow(ctx, `
+		SELECT id, org_id, full_name, status, disabled, pending_org_id, claimed_org_name
+		FROM clients WHERE device_id = $1`, dev).
+		Scan(&existing.ID, &existing.OrgID, &existing.FullName, &existing.Status, &existing.Disabled, &pendingOrgID, &existingClaimed)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return UpsertClientResult{}, err
 	}
@@ -315,18 +319,37 @@ func (s *Store) UpsertClientAuth(ctx context.Context, deviceID, orgName, fullNam
 		return UpsertClientResult{Success: false, Error: "CLIENT_DISABLED", Message: "Client has been disabled"}, nil
 	}
 	t := nowMs()
+	requestedRaw := strings.TrimSpace(orgName)
 	if err == nil {
+		prevOrgID := existing.OrgID
+		applyOrgID := existing.OrgID
+		var claimed any
+		if pendingOrgID != nil && *pendingOrgID > 0 {
+			applyOrgID = *pendingOrgID
+			claimed = nil
+		} else if requestedRaw != "" {
+			claimed = requestedRaw
+		} else if existingClaimed != nil {
+			claimed = *existingClaimed
+		} else {
+			claimed = nil
+		}
 		_, e := s.pool.Exec(ctx, `
-			UPDATE clients SET org_id=$1, full_name=$2, status='sharing', socket_id=$3, last_heartbeat=$4, last_online_at=COALESCE(last_online_at,$4)
-			WHERE device_id=$5`,
-			org.ID, fn, socketID, t, dev)
+			UPDATE clients SET org_id=$1, pending_org_id=NULL, full_name=$2, status='sharing', socket_id=$3,
+				last_heartbeat=$4, last_online_at=COALESCE(last_online_at,$4), claimed_org_name=$5
+			WHERE device_id=$6`,
+			applyOrgID, fn, socketID, t, claimed, dev)
 		if e != nil {
 			return UpsertClientResult{}, e
 		}
 		existing.Status = "sharing"
 		existing.FullName = fn
-		existing.OrgID = org.ID
-		return UpsertClientResult{Success: true, Client: existing}, nil
+		existing.OrgID = applyOrgID
+		res := UpsertClientResult{Success: true, Client: existing}
+		if prevOrgID != applyOrgID {
+			res.ExtraBroadcastOrgID = &prevOrgID
+		}
+		return res, nil
 	}
 	var id int64
 	e := s.pool.QueryRow(ctx, `
