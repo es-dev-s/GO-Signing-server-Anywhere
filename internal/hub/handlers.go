@@ -1066,21 +1066,35 @@ func (h *Hub) handleAdminForceUpdateClient(ctx context.Context, conn *Conn, msg 
 		return
 	}
 	clientSocketID := asNonEmptyString(msg["clientSocketId"], 200)
-	if clientSocketID == "" {
-		h.sendConn(conn, map[string]any{"type": "admin-force-update-client-response", "success": false, "error": "MISSING_CLIENT_SOCKET_ID"})
-		return
-	}
-	h.mu.RLock()
-	target := h.conns[clientSocketID]
-	h.mu.RUnlock()
-	if target == nil || target.kind != KindClient || target.client == nil {
+	clientID, _ := toInt64(msg["clientId"])
+	target, resolvedSocketID := h.resolveLiveClientConn(clientSocketID, clientID)
+	if target == nil {
 		h.sendConn(conn, map[string]any{"type": "admin-force-update-client-response", "success": false, "error": "CLIENT_NOT_FOUND"})
 		return
 	}
 	h.sendConn(target, map[string]any{"type": "force-update"})
-	log.Printf("[admin] force-update sent to client %s (socket %s) by admin %s", target.client.FullName, clientSocketID, a.FullName)
+	log.Printf("[admin] force-update sent to client %s (socket %s) by admin %s", target.client.FullName, resolvedSocketID, a.FullName)
 	h.sendConn(conn, map[string]any{
 		"type": "admin-force-update-client-response", "success": true,
 		"clientName": target.client.FullName,
+		"clientId":   target.client.ID,
 	})
+}
+
+func (h *Hub) resolveLiveClientConn(clientSocketID string, clientID int64) (*Conn, string) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if clientSocketID != "" {
+		if c, ok := h.conns[clientSocketID]; ok && c.kind == KindClient && c.client != nil {
+			return c, clientSocketID
+		}
+	}
+	if clientID > 0 {
+		for sid, c := range h.conns {
+			if c.kind == KindClient && c.client != nil && c.client.ID == clientID {
+				return c, sid
+			}
+		}
+	}
+	return nil, ""
 }
