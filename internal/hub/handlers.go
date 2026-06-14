@@ -88,6 +88,8 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 		h.auditProxyGroupsMutate(ctx, conn, msg)
 	case "offer", "answer", "ice-candidate", "client-ready", "request-offer", "enable-client-media", "client-screen-sources":
 		h.relaySignaling(socketID, conn, msg)
+	case "client-active-screen":
+		h.handleClientActiveScreen(socketID, conn, msg)
 	case "ice-path-report":
 		h.handleIcePathReport(ctx, socketID, conn, msg)
 	case "request-stream-transport-upgrade":
@@ -986,4 +988,48 @@ func (h *Hub) auditProxyList(ctx context.Context, conn *Conn, msg map[string]any
 	}
 	reqs, _ := data["requests"].([]any)
 	h.sendConn(conn, map[string]any{"type": "admin-audit-org-access-list-response", "success": true, "requests": reqs, "pendingCount": data["pendingCount"], "ipcCorrId": ipc})
+}
+
+// handleClientActiveScreen relays the active-screen hint from a client to every
+// admin that currently has a viewer link open to that client socket. The message
+// carries which monitor the client's mouse cursor is on so the admin can
+// optionally auto-switch the viewed screen without manual button clicks.
+func (h *Hub) handleClientActiveScreen(fromSID string, from *Conn, msg map[string]any) {
+	if from.kind != KindClient || from.client == nil {
+		return
+	}
+
+	// Collect all admin socket IDs that are currently viewing this client.
+	h.mu.RLock()
+	viewers := h.clientViewerLinks[fromSID]
+	adminSIDs := make([]string, 0, len(viewers))
+	for adminSID := range viewers {
+		adminSIDs = append(adminSIDs, adminSID)
+	}
+	h.mu.RUnlock()
+
+	if len(adminSIDs) == 0 {
+		return
+	}
+
+	relay := map[string]any{
+		"type":        "client-active-screen",
+		"fromSocketId": fromSID,
+		"fromName":    from.client.FullName,
+	}
+	if idx, ok := msg["screenIndex"]; ok {
+		relay["screenIndex"] = idx
+	}
+	if sid, ok := msg["sourceId"]; ok {
+		relay["sourceId"] = sid
+	}
+
+	for _, adminSID := range adminSIDs {
+		h.mu.RLock()
+		adminConn := h.conns[adminSID]
+		h.mu.RUnlock()
+		if adminConn != nil {
+			h.sendConn(adminConn, relay)
+		}
+	}
 }

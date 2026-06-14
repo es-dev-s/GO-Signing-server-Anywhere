@@ -24,6 +24,7 @@ var highVolumeTypes = map[string]struct{}{
 	"media-provider-failed":            {},
 	"request-stream-transport-upgrade": {},
 	"ice-path-report":                  {},
+	"client-active-screen":             {},
 }
 
 func messageSkipsRateLimit(typ string) bool {
