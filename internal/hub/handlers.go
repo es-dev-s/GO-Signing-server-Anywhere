@@ -92,6 +92,8 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 		h.relaySignaling(socketID, conn, msg)
 	case "client-active-screen":
 		h.handleClientActiveScreen(socketID, conn, msg)
+	case "client-device-info":
+		h.handleClientDeviceInfo(conn, msg)
 	case "ice-path-report":
 		h.handleIcePathReport(ctx, socketID, conn, msg)
 	case "request-stream-transport-upgrade":
@@ -880,6 +882,7 @@ func (h *Hub) mapAdminClientRow(c db.ClientRow) map[string]any {
 		"screenSources": h.screenSourcesJSON(c.ID),
 		"appVersion":    h.clientAppVersion(c.ID),
 		"socketId":      socketID,
+		"deviceInfo":    h.clientDeviceInfoSnapshot(c.ID),
 	}
 }
 
@@ -1097,4 +1100,63 @@ func (h *Hub) resolveLiveClientConn(clientSocketID string, clientID int64) (*Con
 		}
 	}
 	return nil, ""
+}
+
+// handleClientDeviceInfo stores the latest device performance snapshot from a client
+// and relays it to any admin currently watching that client's organisation.
+func (h *Hub) handleClientDeviceInfo(conn *Conn, msg map[string]any) {
+	if conn.kind != KindClient || conn.client == nil {
+		return
+	}
+	// Store snapshot on the connection (lightweight – just the last reading).
+	snapshot := make(map[string]any, len(msg))
+	for k, v := range msg {
+		if k != "type" {
+			snapshot[k] = v
+		}
+	}
+	snapshot["clientId"]       = conn.client.ID
+	snapshot["clientFullName"] = conn.client.FullName
+
+	h.mu.Lock()
+	conn.deviceInfo = snapshot
+	h.mu.Unlock()
+
+	// Relay to every admin watching this client's org.
+	relay := map[string]any{
+		"type":           "client-device-info-update",
+		"clientId":       conn.client.ID,
+		"clientFullName": conn.client.FullName,
+		"orgId":          conn.client.OrgID,
+	}
+	for k, v := range snapshot {
+		if k != "clientId" && k != "clientFullName" {
+			relay[k] = v
+		}
+	}
+	h.mu.RLock()
+	var targets []*Conn
+	for _, c := range h.conns {
+		if c.kind == KindAdmin && c.admin != nil {
+			if c.admin.Role == "super_admin" || c.admin.OrgID == conn.client.OrgID {
+				targets = append(targets, c)
+			}
+		}
+	}
+	h.mu.RUnlock()
+	for _, t := range targets {
+		h.sendConn(t, relay)
+	}
+}
+
+// clientDeviceInfoSnapshot returns the latest cached device-info snapshot for a connected client.
+func (h *Hub) clientDeviceInfoSnapshot(clientID int64) map[string]any {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, conn := range h.conns {
+		if conn.kind == KindClient && conn.client != nil && conn.client.ID == clientID {
+			return conn.deviceInfo
+		}
+	}
+	return nil
 }

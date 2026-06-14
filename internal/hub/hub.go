@@ -71,6 +71,7 @@ type Conn struct {
 	screenSources         []ScreenSource
 	screenSourcesSig      string
 	appVersion            string
+	deviceInfo            map[string]any
 	signalSeq             int64
 	isAlive               bool
 }
