@@ -70,6 +70,7 @@ type Conn struct {
 	pendingDeviceID       string
 	screenSources         []ScreenSource
 	screenSourcesSig      string
+	appVersion            string
 	signalSeq             int64
 	isAlive               bool
 }

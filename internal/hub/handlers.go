@@ -78,6 +78,8 @@ func (h *Hub) handleMessage(socketID string, conn *Conn, msg map[string]any) {
 		h.handleAdminUpdateClientOrg(ctx, conn, msg)
 	case "admin-remove-client":
 		h.handleAdminRemoveClient(ctx, conn, msg)
+	case "admin-force-update-client":
+		h.handleAdminForceUpdateClient(ctx, conn, msg)
 	case "admin-audit-org-access-list":
 		h.auditProxyList(ctx, conn, msg)
 	case "admin-audit-org-access-review":
@@ -190,6 +192,7 @@ func (h *Hub) handleClientAuth(ctx context.Context, socketID string, conn *Conn,
 	conn.kind = KindClient
 	conn.client = &ClientIdentity{ID: res.Client.ID, OrgID: res.Client.OrgID, FullName: res.Client.FullName, DeviceID: deviceID}
 	conn.admin = nil
+	conn.appVersion = asNonEmptyString(msg["appVersion"], 32)
 	ingest, _ := auth.SignIngestToken(h.cfg.IngestTokenSecret, res.Client.ID, res.Client.OrgID, h.cfg.IngestTokenTTLMs)
 	h.sendConn(conn, map[string]any{
 		"type": "client-auth-response", "success": true,
@@ -866,12 +869,29 @@ func (h *Hub) screenSourcesJSON(clientID int64) []any {
 }
 
 func (h *Hub) mapAdminClientRow(c db.ClientRow) map[string]any {
+	socketID := ""
+	if c.SocketID != nil {
+		socketID = *c.SocketID
+	}
 	return map[string]any{
 		"id": c.ID, "fullName": c.FullName, "status": h.effectiveStatus(c),
 		"orgId": c.OrgID, "orgName": c.OrgName, "claimedOrgName": c.ClaimedOrgName,
 		"lastHeartbeatMs": c.LastHeartbeat, "lastOnlineMs": c.LastOnlineAt, "lastOfflineMs": c.LastOfflineAt,
 		"screenSources": h.screenSourcesJSON(c.ID),
+		"appVersion":    h.clientAppVersion(c.ID),
+		"socketId":      socketID,
 	}
+}
+
+func (h *Hub) clientAppVersion(clientID int64) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, conn := range h.conns {
+		if conn.client != nil && conn.client.ID == clientID {
+			return conn.appVersion
+		}
+	}
+	return ""
 }
 
 func (h *Hub) broadcastClientsListToAdmins(ctx context.Context, orgID int64) error {
@@ -1032,4 +1052,35 @@ func (h *Hub) handleClientActiveScreen(fromSID string, from *Conn, msg map[strin
 			h.sendConn(adminConn, relay)
 		}
 	}
+}
+
+// handleAdminForceUpdateClient relays a force-update command to a specific client socket.
+// Only super_admin may call this. The client will trigger an immediate OTA install.
+func (h *Hub) handleAdminForceUpdateClient(ctx context.Context, conn *Conn, msg map[string]any) {
+	a := h.requireAdmin(ctx, conn, msg)
+	if a == nil {
+		return
+	}
+	if a.Role != "super_admin" {
+		h.sendConn(conn, map[string]any{"type": "admin-force-update-client-response", "success": false, "error": "FORBIDDEN"})
+		return
+	}
+	clientSocketID := asNonEmptyString(msg["clientSocketId"], 200)
+	if clientSocketID == "" {
+		h.sendConn(conn, map[string]any{"type": "admin-force-update-client-response", "success": false, "error": "MISSING_CLIENT_SOCKET_ID"})
+		return
+	}
+	h.mu.RLock()
+	target := h.conns[clientSocketID]
+	h.mu.RUnlock()
+	if target == nil || target.kind != KindClient || target.client == nil {
+		h.sendConn(conn, map[string]any{"type": "admin-force-update-client-response", "success": false, "error": "CLIENT_NOT_FOUND"})
+		return
+	}
+	h.sendConn(target, map[string]any{"type": "force-update"})
+	log.Printf("[admin] force-update sent to client %s (socket %s) by admin %s", target.client.FullName, clientSocketID, a.FullName)
+	h.sendConn(conn, map[string]any{
+		"type": "admin-force-update-client-response", "success": true,
+		"clientName": target.client.FullName,
+	})
 }
